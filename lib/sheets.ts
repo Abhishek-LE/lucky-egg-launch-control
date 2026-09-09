@@ -68,6 +68,42 @@ export async function getPeople(): Promise<{ name: string; team: string }[]> {
   return rows.map((r) => ({ name: r[0] || "", team: r[1] || "" }));
 }
 
+/** Converts MM/DD/YYYY → YYYY-MM-DD; passes through anything else. */
+function normaliseDate(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  return raw;
+}
+
+/**
+ * Reads the "Arrival Date by SKU" tab (read-only — do NOT write to this tab).
+ * Returns a map keyed by "SKU:Region" → { launchDate, arrivalDate } in YYYY-MM-DD.
+ */
+export async function getLaunchDates(): Promise<
+  Map<string, { launchDate: string | null; arrivalDate: string | null }>
+> {
+  const sheets = getSheetsClient();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: "'Arrival Date by SKU'!A2:D",
+  });
+  const rows = res.data.values || [];
+  const map = new Map<string, { launchDate: string | null; arrivalDate: string | null }>();
+  for (const r of rows) {
+    const sku = r[0]?.trim();
+    const region = r[3]?.trim();
+    if (!sku || !region) continue;
+    const key = `${sku}:${region}`;
+    if (map.has(key)) continue; // keep the first row per SKU+region
+    map.set(key, {
+      arrivalDate: normaliseDate(r[1]?.trim()),
+      launchDate: r[2]?.trim() || null,
+    });
+  }
+  return map;
+}
+
 /**
  * Updates the Status cell (column F) for a single SKU_Tasks row.
  * rowNumber must come from a row previously read via getSkuTasks(),
@@ -80,5 +116,16 @@ export async function updateTaskStatus(rowNumber: number, newStatus: string) {
     range: `SKU_Tasks!F${rowNumber}`,
     valueInputOption: "RAW",
     requestBody: { values: [[newStatus]] },
+  });
+}
+
+/** Updates the Owner cell (column H) for a single SKU_Tasks row. */
+export async function updateTaskOwner(rowNumber: number, owner: string) {
+  const sheets = getSheetsClient();
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `SKU_Tasks!H${rowNumber}`,
+    valueInputOption: "RAW",
+    requestBody: { values: [[owner]] },
   });
 }
